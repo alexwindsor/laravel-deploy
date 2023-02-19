@@ -1,0 +1,85 @@
+#!/usr/bin/php
+<?php
+
+
+// check that user is root
+$user = trim(shell_exec('whoami'));
+
+if ($user !== 'root') 
+    die("You need to be root to run this\n");
+
+// This command gets the name of the user who issued the sudo command
+// we need this for setting the permissions later
+$sudo_user = trim(shell_exec('echo $(logname)'));
+if ($sudo_user === 'root')
+    die("It's not safe to run this command as root without using sudo\n");
+
+// first argument needs to be the name of the project
+if (! isset($argv[1])) 
+    die("Missing project name\n");
+
+if (strpbrk($argv[1], '|\'\\?*&<";:>+[]=/ ')) 
+    die("Project name includes invalid characters\n");
+
+$project_name = $argv[1];
+$cwd = getcwd(); // current directory
+
+// check that we are 'probably' in the root directory of a Laravel project
+if (
+    !file_exists($cwd . '/artisan') 
+    || !file_exists($cwd . '/public') 
+    || !file_exists($cwd . '/app')
+    || !file_exists($cwd . '/resources')
+    || !file_exists($cwd . '/routes')
+    || !file_exists($cwd . '/vendor')
+    ) 
+    die("You need to be in the root directory of a Laravel project.\n");
+
+// if the -o (overwrite) option is selected then we delete any existing project first
+if (isset($argv[2]) && $argv[2] === '-o') {
+    if (file_exists('/var/www/' . $project_name . '_code')) shell_exec('rm -r /var/www/' . $project_name . '_code');
+    if (file_exists('/var/www/html/' . $project_name)) shell_exec('rm -r /var/www/html/' . $project_name);
+}
+// otherwise we need to check that there's not already a project with that name
+else {
+    if (
+        file_exists('/var/www/html/' . $project_name)
+        || file_exists('/var/www/' . $project_name . '_code')
+        )
+        die("There seems to already be a project with that name on the webserver.\n");
+}
+
+// copy the files over to the server
+shell_exec('cp -r . /var/www/' . $project_name . '_code/');
+shell_exec('mv /var/www/' . $project_name . '_code/public /var/www/html/' . $project_name);
+
+// update the links in the index.php file in 'public' to reach the new location of the rest of the project files
+$index_php = file_get_contents('/var/www/html/' . $project_name . '/index.php');
+$index_php = str_replace('/../', '/../../' . $project_name . '_code/', $index_php);
+file_put_contents('/var/www/html/' . $project_name . '/index.php', $index_php);
+
+// change the permissions of all the files in the web server to 770 - because we are copying everything over as root
+shell_exec('sudo chown -R ' . $sudo_user . ':www-data /var/www/ && sudo chmod -R 770 /var/www/');
+
+
+
+
+//update the apache2 config file to make routing work for this project
+$sites_available_apache2_config_file = "\n\n\n
+# ------- created automatically by Alex Windsor's Laravel Deployment script
+<Directory /var/www/html/" . $project_name . ">
+    Options Indexes FollowSymLinks
+    AllowOverride All
+    Require all granted
+</Directory>
+# -------
+\n\n
+";
+file_put_contents('/etc/apache2/sites-available/000-default.conf', $sites_available_apache2_config_file, FILE_APPEND);
+
+// reboot the apache2 webserver
+shell_exec('sudo service apache2 restart');
+
+echo "Your new project has been deployed to http://localhost/" . $project_name . "\n";
+
+
