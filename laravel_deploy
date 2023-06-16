@@ -1,85 +1,138 @@
 #!/usr/bin/php
 <?php
 
-
 // check that user is root
 $user = trim(shell_exec('whoami'));
-
-if ($user !== 'root') 
-    die("You need to be root to run this\n");
+if ($user !== 'root') die("You need to be root to run this\n");
 
 // This command gets the name of the user who issued the sudo command
 // we need this for setting the permissions later
 $sudo_user = trim(shell_exec('echo $(logname)'));
-if ($sudo_user === 'root')
-    die("It's not safe to run this command as root without using sudo\n");
+if ($sudo_user === 'root') die("It's not safe to run this command as root without using sudo\n");
 
-// first argument needs to be the name of the project
-if (! isset($argv[1])) 
-    die("Missing project name\n");
-
-if (strpbrk($argv[1], '|\'\\?*&<";:>+[]=/ ')) 
-    die("Project name includes invalid characters\n");
-
-$project_name = $argv[1];
 $cwd = getcwd(); // current directory
 
 // check that we are 'probably' in the root directory of a Laravel project
 if (
     !file_exists($cwd . '/artisan') 
+    || !file_exists($cwd . '/app') 
+    || !file_exists($cwd . '/bootstrap')
+    || !file_exists($cwd . '/config')
+    || !file_exists($cwd . '/database')
     || !file_exists($cwd . '/public') 
-    || !file_exists($cwd . '/app')
     || !file_exists($cwd . '/resources')
     || !file_exists($cwd . '/routes')
+    || !file_exists($cwd . '/storage')
     || !file_exists($cwd . '/vendor')
     ) 
     die("You need to be in the root directory of a Laravel project.\n");
 
-// if the -o (overwrite) option is selected then we delete any existing project first
-if (isset($argv[2]) && $argv[2] === '-o') {
-    if (file_exists('/var/www/' . $project_name . '_code')) shell_exec('rm -r /var/www/' . $project_name . '_code');
-    if (file_exists('/var/www/html/' . $project_name)) shell_exec('rm -r /var/www/html/' . $project_name);
-}
-// otherwise we need to check that there's not already a project with that name
-else {
-    if (
-        file_exists('/var/www/html/' . $project_name)
-        || file_exists('/var/www/' . $project_name . '_code')
-        )
-        die("There seems to already be a project with that name on the webserver.\n");
+$project_name = readline('Project name: (leave blank for "' . substr($cwd, strrpos($cwd, '/') + 1) . '"):');
+
+if ($project_name == '') $project_name = substr($cwd, strrpos($cwd, '/') + 1);
+
+if (file_exists('/var/www/' . $project_name . '_code') || file_exists('/var/www/html/' . $project_name)) {
+    $replace = readline('There\'s already a deployed project called ' . $project_name . ' - replace? (y/n):');
+    if ($replace !== 'y' && $replace !== 'Y') die('Choose a different project name' . $replace);
 }
 
-// copy the files over to the server
-shell_exec('cp -r . /var/www/' . $project_name . '_code/');
-shell_exec('mv /var/www/' . $project_name . '_code/public /var/www/html/' . $project_name);
+
+
+// get alternative apache2 config file path
+$apache2_config_file = readline('Apache2 config file? (leave blank for default: /etc/apache2/sites-available/000-default.conf):');
+if ($apache2_config_file == '') $apache2_config_file = '/etc/apache2/sites-available/000-default.conf';
+
+if (! file_exists($apache2_config_file)) die("Couldn't find the Apache2 configuration file\n");
+
+echo "...............\n";
+
+if (file_exists('/var/www/' . $project_name . '_code')) {
+    echo 'Deleting old directory /var/www/' . $project_name . '_code' . "\n";
+    shell_exec('rm -r /var/www/' . $project_name . '_code');
+} 
+if (file_exists('/var/www/html/' . $project_name)) {
+    echo 'Deleting old directory /var/www/html/' . $project_name . "\n";
+    shell_exec('rm -r /var/www/html/' . $project_name);
+} 
+
+
+$_env = file_get_contents('.env');
+$_env = str_replace('VITE_SERVER_SUBDIR="/"', 'VITE_SERVER_SUBDIR="/' . $project_name . '/"', $_env);
+file_put_contents('.env', $_env);
+
+if (file_exists('node_modules')) {
+    echo "Running npm run build\n";
+    shell_exec('npm run build');
+}
+
+
+echo 'Copying public files to /var/www/html/' . $project_name . "\n";
+shell_exec('mkdir /var/www/html/' . $project_name);
+shell_exec('cp -r public/* public/.htaccess /var/www/html/' . $project_name . ' 2> /dev/null');
+// shell_exec('cp -r public/.htaccess /var/www/html/' . $project_name . ' 2> /dev/null');
+
+echo 'Copying php files to /var/www/' . $project_name . '_code' . "\n";
+shell_exec('mkdir /var/www/' . $project_name . '_code 2> /dev/null');
+shell_exec('cp *.js *.json .env  /var/www/' . $project_name . '_code 2> /dev/null');
+shell_exec('cp -r app/ bootstrap/ config/ database/ resources/ routes/ storage/ vendor/ /var/www/' . $project_name . '_code 2> /dev/null');
+
+$_env = str_replace('VITE_SERVER_SUBDIR="/' . $project_name . '/"', 'VITE_SERVER_SUBDIR="/"', $_env);
+file_put_contents('.env', $_env);
+
+// fix bug in inertiajs
+if (file_exists('/var/www/' . $project_name . '_code/vendor/inertiajs/inertia-laravel/src/Response.php')) {
+    $response_php = file_get_contents('/var/www/' . $project_name . '_code/vendor/inertiajs/inertia-laravel/src/Response.php');
+    $response_php = str_replace('\'url\' => $request->getBaseUrl().$request->getRequestUri(),', '\'url\' => $request->getRequestUri(),', $response_php);
+    file_put_contents('/var/www/' . $project_name . '_code/vendor/inertiajs/inertia-laravel/src/Response.php', $response_php);
+}
+
 
 // update the links in the index.php file in 'public' to reach the new location of the rest of the project files
+echo "Updating the links in index.php\n";
 $index_php = file_get_contents('/var/www/html/' . $project_name . '/index.php');
 $index_php = str_replace('/../', '/../../' . $project_name . '_code/', $index_php);
 file_put_contents('/var/www/html/' . $project_name . '/index.php', $index_php);
 
-// change the permissions of all the files in the web server to 770 - because we are copying everything over as root
-shell_exec('sudo chown -R ' . $sudo_user . ':www-data /var/www/ && sudo chmod -R 770 /var/www/');
+$default_conf = file_get_contents($apache2_config_file);
 
-
-
-
-//update the apache2 config file to make routing work for this project
-$sites_available_apache2_config_file = "\n\n\n
-# ------- created automatically by Alex Windsor's Laravel Deployment script
+if (strpos($default_conf, '<Directory /var/www/html/' . $project_name . '>') === false) {
+    $sites_available_apache2_config_file = "# ------- created automatically by Alex Windsor's Laravel Deployment script
 <Directory /var/www/html/" . $project_name . ">
     Options Indexes FollowSymLinks
     AllowOverride All
     Require all granted
 </Directory>
-# -------
-\n\n
-";
-file_put_contents('/etc/apache2/sites-available/000-default.conf', $sites_available_apache2_config_file, FILE_APPEND);
+# -------";
+    file_put_contents($apache2_config_file, $sites_available_apache2_config_file, FILE_APPEND);
+    echo 'Updating ' . $apache2_config_file . "\n";
+}
+
+shell_exec('chown -R ' . $sudo_user . ':www-data /var/www/ && sudo chmod -R 770 /var/www/');
 
 // reboot the apache2 webserver
-shell_exec('sudo service apache2 restart');
+shell_exec('service apache2 restart');
+
+// add the links to the css and js scripts to app.blade.php
+$scripts = scandir('/var/www/html/' . $project_name . '/build/assets/');
+$links = '';
+foreach ($scripts as $script) {
+    if ($script == '.' || $script == '..') continue;
+    if (substr($script, -3) == 'css') $links .= '<link rel="stylesheet" href="build/assets/' . $script . '">';
+    else $links .= '<script type="module" src="build/assets/' . $script . '"></script>';
+    $links .= "\n";
+}
+
+$app_php = file_get_contents('/var/www/' . $project_name . '_code/resources/views/app.blade.php');
+
+$app_php = str_replace('@routes', '', $app_php);
+$app_php = str_replace('@vite([\'resources/js/app.js\', "resources/js/Pages/{$page[\'component\']}.vue"])', $links, $app_php);
+$app_php = str_replace('@routes', '', $app_php);
+
+file_put_contents('/var/www/' . $project_name . '_code/resources/views/app.blade.php', $app_php);
+
+
+
+
+
 
 echo "Your new project has been deployed to http://localhost/" . $project_name . "\n";
-
-
