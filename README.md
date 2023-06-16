@@ -1,10 +1,6 @@
 This is a small php script designed to run on the command line.
 
-IMPORTANT: This program assumes that you are running apache2 on linux mint, with php modules installed. It assumes that the apache2 config file to update is :
-
-/etc/apache2/sites-available/000-default.conf
-
-If your server is different, you can change the code to match your environment.
+** NOT CURRENTLY WORKING FOR A LARAVEL BREEZE PROJECT
 
 You need to run this in the root directory of a laravel as root. You give an input as the name of your project, eg:
 
@@ -12,6 +8,7 @@ sudo laravel_deploy my-project
 
 It deploys a laravel project by doing the following:
 
+* runs npm run dev
 * copies all the files and folders except the public/ folder to /var/www/my-project_code
 * copies the contents of the /public folder to /var/www/html/my-project
 * changes all the links in the /var/www/html/my-project/index.php file to point to ../../xxx.php
