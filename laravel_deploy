@@ -45,14 +45,13 @@ if (! file_exists($apache2_config_file)) die("Couldn't find the Apache2 configur
 
 echo "..........................\n";
 
-echo "clearing all caches\n";
+echo "clearing all caches\n"
 
-php artisan cache:clear
-php artisan view:clear
-php artisan config:clear
-php artisan event:clear
-php artisan route:clear
-
+shell_exec('php artisan cache:clear');
+shell_exec('php artisan view:clear');
+shell_exec('php artisan config:clear');
+shell_exec('php artisan event:clear');
+shell_exec('php artisan route:clear');
 
 // delete pre-existing projects with the same project name
 if (file_exists('/var/www/' . $project_name . '_code')) {
